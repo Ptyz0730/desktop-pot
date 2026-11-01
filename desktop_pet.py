@@ -54,6 +54,7 @@ except ImportError:  # pragma: no cover
 import ai_client
 import jp_gloss
 import kaomoji
+import pet_games
 import pet_mood
 import pet_music
 
@@ -7220,6 +7221,19 @@ class DesktopPet:
         self._menu_head(self.menu, "玩法")
         self.menu.add_cascade(label="逗它玩", menu=play_menu,
                               image=self._menu_icon("sparkle"), compound="left")
+        games_menu = self._style_menu(tk.Menu(self.menu, tearoff=0))
+        game_icons = {"rps": "paw", "guess": "face",
+                      "memory": "sparkle", "mole": "shoot"}
+        for key, (label, _cls) in pet_games.GAMES.items():
+            self._menu_add(games_menu, label, icon=game_icons.get(key),
+                           command=lambda k=key: self._defer(
+                               self.open_game, k))
+        games_menu.add_separator()
+        games_menu.add_command(label=self._game_stats_text(), state="disabled")
+        self._games_stats_index = games_menu.index("end")
+        self._game_menu = games_menu
+        self.menu.add_cascade(label="小游戏", menu=games_menu,
+                              image=self._menu_icon("paw"), compound="left")
         self._menu_add(self.menu, "说点什么", icon="smile",
                        command=lambda: self._defer(self.speak_random))
         self._menu_add(self.menu, "来一个颜文字", icon="face",
@@ -8956,6 +8970,41 @@ class DesktopPet:
             self.chat_win.refresh_romance()
         self._update_persona_menu()
         return True
+
+    def open_game(self, key):
+        """右键 → 小游戏。玩完的好感度、成绩都在 pet_games 里处理。"""
+        try:
+            pet_games.open_game(self, key)
+        except Exception:                       # noqa: BLE001
+            _log_exception()
+            self.speak("这个玩不了，等下再试。")
+        else:
+            self._refresh_game_stats()
+
+    def _game_stats_text(self):
+        st = self.cfg.get("games")
+        if not isinstance(st, dict):
+            st = {}
+        parts = []
+        if st.get("mole_best"):
+            parts.append("打地鼠 %d" % int(st["mole_best"]))
+        if st.get("guess_best"):
+            parts.append("猜数字 %d 次" % int(st["guess_best"]))
+        if st.get("memory_best"):
+            parts.append("翻牌 %d 步" % int(st["memory_best"]))
+        if st.get("rps_wins"):
+            parts.append("猜拳赢 %d 次" % int(st["rps_wins"]))
+        return "成绩: " + " · ".join(parts) if parts else "还没有成绩，玩一局试试"
+
+    def _refresh_game_stats(self):
+        menu = getattr(self, "_game_menu", None)
+        if menu is None:
+            return
+        try:
+            menu.entryconfigure(self._games_stats_index,
+                                label=self._game_stats_text())
+        except Exception:                       # noqa: BLE001
+            pass
 
     def _summarize_async(self):
         """把老对话压成摘要，控制 token；不碰气泡，所以不参与说话权。"""
