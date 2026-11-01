@@ -1,0 +1,27 @@
+# ---- 运行产物 / 构建目录 ----
+__pycache__/
+*.py[cod]
+build/
+dist/
+pylibs/
+.tmp/
+*.log
+
+# ---- 本机配置：含 API Key，绝不入库 ----
+pet_config.json
+pet_config.bak.json
+backups/
+
+# ---- 截图、录屏、临时转储（自检产物，不是源码） ----
+*_preview*.png
+*_preview*.gif
+mood_*.png
+api_probe*.png
+bubble_*.png
+size_compare.png
+weblink_dialog.png
+form_exe.png
+pet_covered_preview.png
+*.lnk
+_*.txt
+chm_persona_probe.txt
