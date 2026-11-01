@@ -1,4 +1,4 @@
-﻿# ---- 运行产物 / 构建目录 ----
+# ---- 运行产物 / 构建目录 ----
 __pycache__/
 *.py[cod]
 build/
@@ -33,3 +33,6 @@ chm_persona_probe.txt
 /game_memory.png
 /game_mole.png
 /game_menu.png
+/game_desktop.png
+/_probe*.png
+/_exe_*.png

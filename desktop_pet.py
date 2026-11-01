@@ -5757,6 +5757,10 @@ class DesktopPet:
         self.kaomoji_enabled = bool(self.cfg.get("kaomoji", True))
         self.want_layered = style == "layered"
         self.force_colorkey = style == "colorkey"
+        # 注意：配置里那个 "style" 记的是**上次实际用的后端**，不拿来当意图。
+        # 以前它被当成意图读回来，于是"某次不小心用了 layered（整层不显示）"
+        # 会被写进配置，之后每次启动都沿用这个看不见的后端 —— 立绘一片空白。
+        self.style_pref = style
         # 桌宠永远待在桌面层（贴在所有普通窗口下面），不再有"置顶"这个选项。
         # topmost 参数只为兼容老的调用方保留，传什么都是 False。
         self.topmost = False
@@ -7877,16 +7881,18 @@ class DesktopPet:
     def _style_for(self, img):
         """按图片挑渲染后端。
 
-        带真实透明通道的用户图片只能走 layered（一位抠底会把透明区压成实色），
-        内置那三张已经为抠底调好了，就用更稳的 colorkey。
+        以前：带真实透明通道的图默认走 layered（alpha 最干净）。
+        现在：layered 在某些机器上整层不合成（窗口在、画面全空），
+        所以**默认一律 colorkey**，带 alpha 的图会把 alpha 压平到抠底色上
+        （见 sprite_for：硬边遮罩 + flatten_to），效果够用且哪里都能显示。
+        想要 layered 得显式选：命令行 --style layered（配置里那个 style
+        只记上次实际用的后端，不作为下次的意图 —— 否则一次走岔就永久空白）。
         """
         if self.force_colorkey:
             return "colorkey"
         if self.want_layered:
             return "layered"
-        if img.prefer_colorkey or not img.alpha:
-            return "colorkey"
-        return "layered"
+        return "colorkey"
 
     def _active_image(self):
         for img in self.images:
