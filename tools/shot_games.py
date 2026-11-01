@@ -47,52 +47,61 @@ try:
     if os.path.exists(CFG):
         os.remove(CFG)
     pet = dp.DesktopPet(use_ai=True, topmost=True, bubble=False)
-    settle(pet, 0.4)
+    settle(pet, 0.5)
     pet.brain.api_key = "test"
 
-    # 猜拳：打一局，让它出石头
+    # 猜拳：赢一局，停在“你赢这局”的画面
     g = pet_games.open_game(pet, "rps")
-    settle(pet, 0.4)
+    settle(pet, 0.5)
     orig = pet_games.random.choice
-    g.play("布")
-    g.play("布")
-    pet_games.random.choice = orig
+    pet_games.random.choice = lambda seq: "剪刀"
+    g.play("石头")
     settle(pet, 0.4)
+    g.play("石头")
+    settle(pet, 0.8)
+    pet_games.random.choice = orig
     grab(pet, g, "game_rps.png")
     g.close()
 
-    # 猜数字：猜中局中
+    # 猜数字：猜小了一次，停在“大了/小了”的画面
     g = pet_games.open_game(pet, "guess")
-    settle(pet, 0.4)
+    settle(pet, 0.5)
     g.target = 42
-    g.entry.insert(0, "30")
-    g.guess()
-    g.entry.insert(0, "60")
-    g.guess()
+    for d in "30":
+        g.press(d)
+    g.submit()
+    for d in "60":
+        g.press(d)
+    g.submit()
     settle(pet, 0.3)
     grab(pet, g, "game_guess.png")
     g.close()
 
-    # 翻牌：翻开几对
+    # 翻牌：翻开一对 + 一张
     g = pet_games.open_game(pet, "memory")
-    settle(pet, 0.4)
+    settle(pet, 0.5)
     pairs = {}
     for idx, sym in enumerate(g.symbols):
         pairs.setdefault(sym, []).append(idx)
-    for a, b in list(pairs.values())[:2]:
+    vals = list(pairs.values())
+    for a, b in vals[:2]:
         g.flip(a)
+        settle(pet, 0.2)
         g.flip(b)
-    g.flip(list(pairs.values())[2][0])
+        settle(pet, 0.4)
+    g.flip(vals[2][0])
     settle(pet, 0.3)
     grab(pet, g, "game_memory.png")
     g.close()
 
-    # 打地鼠：冒出两只
+    # 打地鼠：冒出三只，分数 7
     g = pet_games.open_game(pet, "mole")
-    settle(pet, 0.4)
-    g._pop()
+    settle(pet, 0.5)
     g.score = 7
-    settle(pet, 0.3)
+    g.c.itemconfigure(g.score_txt, text="得分 7")
+    for hole in (1, 4, 7):
+        g._spawn(hole)
+    settle(pet, 0.55)
     grab(pet, g, "game_mole.png")
     g.close()
 
