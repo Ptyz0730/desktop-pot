@@ -1,4 +1,4 @@
-# ---- 运行产物 / 构建目录 ----
+﻿# ---- 运行产物 / 构建目录 ----
 __pycache__/
 *.py[cod]
 build/
@@ -25,3 +25,6 @@ pet_covered_preview.png
 *.lnk
 _*.txt
 chm_persona_probe.txt
+/zdl_chat.png
+/zdl_desktop.png
+/zdl_danmaku.png

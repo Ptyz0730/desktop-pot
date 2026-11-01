@@ -52,6 +52,7 @@ except ImportError:  # pragma: no cover
     sys.exit("需要 Pillow: <python> -m pip install pillow")
 
 import ai_client
+import jp_gloss
 import kaomoji
 import pet_mood
 import pet_music
@@ -101,6 +102,7 @@ AFFECTION_HINT_STEP = 60 # 跨过这个值时说一句"它好像更喜欢你了"
 IMAGE_PERSONAS = {
     "捧花少年.png": "闷骚少年",
     "chm_love_me.png": "闷骚少年",     # 用户自己放的陈瀚铭立绘
+    "郑迪隆.png": "骚话少年",           # 郑迪隆立绘（tools/make_photo_sprite.py 抠的）
     "中性灰.png": "话痨朋友",
     "浅色桌面.png": "话痨朋友",
     "深色桌面.png": "话痨朋友",
@@ -2630,11 +2632,23 @@ class HeartFX:
 
 
 # =====================================================================
-# 摸头弹幕（只给 chm_love_me.png）
+# 摸头弹幕（会特技的形象才冒：陈瀚铭 / 郑迪隆）
 # =====================================================================
 DANMAKU_PHRASES = (
     ("きもちいい〜", "kimochi ii · 好舒服～"),
 )
+
+# 按人设给的弹幕：日文一行 + 下面一行中文（照着用户给的骚话库挑的）
+DANMAKU_PHRASES_BY_PERSONA = {
+    "闷骚少年": DANMAKU_PHRASES,
+    "骚话少年": (
+        ("気持ちいい", "好舒服啊"),
+        ("ちょっとドキドキする", "有点心跳加速"),
+        ("離さないよ", "不放你走哦"),
+        ("君だけだよ", "只有你哦"),
+        ("もう一回", "再来一次"),
+    ),
+}
 
 
 def _text_font(names, size):
@@ -2689,11 +2703,23 @@ class DanmakuFX:
         self._failed = False
 
     # ---------------------------------------------------------- 文字
+    def _phrases(self):
+        """当前形象该冒哪几句（按人设走；取不到就用默认那一句）。"""
+        getter = getattr(self.pet, "danmaku_phrases", None)
+        if callable(getter):
+            try:
+                phrases = getter()
+            except Exception:               # noqa: BLE001 - 弹幕不值得为此崩
+                phrases = None
+            if phrases:
+                return phrases
+        return DANMAKU_PHRASES
+
     def _text_image(self):
         scale = self.pet.scale
         jp_size = max(19, int(round(26.0 * (0.82 + 0.50 * scale))))
         cn_size = max(13, int(round(17.0 * (0.82 + 0.50 * scale))))
-        jp, cn = random.choice(DANMAKU_PHRASES)
+        jp, cn = random.choice(self._phrases())
         key = (jp, cn, jp_size, cn_size)
         cached = self._img_cache.get(key)
         if cached is not None:
@@ -3871,7 +3897,9 @@ class ChatDialog:
             text = str(msg.get("content") or "")
             if not text:
                 continue
-            self._append(text, "me" if role == "user" else "pet")
+            self._append(
+                text if role == "user" else jp_gloss.add_gloss(text),
+                "me" if role == "user" else "pet")
 
     def _append(self, text, tag):
         if self.log is None:
@@ -3890,7 +3918,8 @@ class ChatDialog:
         self._hide_options()
 
     def add_reply(self, text, options=None):
-        self._append(text, "pet")
+        # 日语的下一行补中文（郑迪隆的骚话玩家不一定看得懂）
+        self._append(jp_gloss.add_gloss(text), "pet")
         self._had_reply = True
         self.set_options(options or [])
 
@@ -5697,8 +5726,10 @@ class DesktopPet:
     squash_floor = 0.62          # 最扁时纵向只剩 62%
     SQUASH_DECAY = 0.11          # 回弹速度
 
-    # 摸头弹幕只给陈瀚铭这套图（文件名以 chm 开头），其他形象摸了只冒爱心/星星
-    DANMAKU_PREFIXES = ("chm",)
+    # 摸头弹幕 + 打飞机：只有"会这个特技"的形象才有。
+    # 以前只认文件名（chm 开头），现在按人设判断，换张图也照样会。
+    DANMAKU_PERSONAS = ("闷骚少年", "骚话少年")
+    DANMAKU_PREFIXES = ("chm",)   # 兼容老图：文件名 chm 开头也算（人设没登记时）
 
     # 摸头：鼠标在头顶左右来回蹭。两笔反向、各够长就触发
     PET_STROKE_MIN_PX = 14       # 单笔至少这么长，防止手抖
@@ -6537,9 +6568,9 @@ class DesktopPet:
 
     # ------------------------------------------------------------ 打飞机
     def trigger_shooting(self):
-        """右键「打飞机」：只有 chm 会这个特技。"""
-        if not self.danmaku_allowed():
-            self.speak("这个特技只有陈瀚铭会。")
+        """右键「打飞机」：只有会特技的形象（陈瀚铭 / 郑迪隆）会。"""
+        if not self.has_special_skill():
+            self.speak("这个特技只有陈瀚铭和郑迪隆会。")
             return
         now = self._now()
         self.shooting_until = now + 3.4
@@ -6752,10 +6783,26 @@ class DesktopPet:
         now = self._now() if now is None else now
         return bool(self._pet_energy > 0.01 or now < self.petting_until)
 
-    def danmaku_allowed(self):
-        """这条形象有没有摸头弹幕（目前只有文件名以 chm 开头的陈瀚铭）。"""
+    def has_special_skill(self):
+        """会不会"摸头弹幕 + 打飞机"：按人设判断（陈瀚铭 / 郑迪隆）。
+
+        老图（文件名 chm 开头、配置里还没登记人设的）也算会，避免升级后
+        用户原来的立绘突然不能打飞机了。
+        """
+        persona = str(getattr(self, "_persona", "") or "").strip()
+        if persona in self.DANMAKU_PERSONAS:
+            return True
         name = os.path.basename(self.image_name).lower()
         return any(name.startswith(prefix) for prefix in self.DANMAKU_PREFIXES)
+
+    def danmaku_allowed(self):
+        """这条形象摸头时会不会冒弹幕（和打飞机是同一批人）。"""
+        return self.has_special_skill()
+
+    def danmaku_phrases(self):
+        """当前人设的弹幕台词（日文 + 中文两行）。"""
+        persona = str(getattr(self, "_persona", "") or "").strip()
+        return DANMAKU_PHRASES_BY_PERSONA.get(persona, DANMAKU_PHRASES)
 
     def _update_petting(self, now, dt):
         """按时间平滑推进摸头动画：整体强度、跟手方向、下压/摆动位移。"""
@@ -7150,7 +7197,7 @@ class DesktopPet:
             self._menu_add(play_menu, label, icon=icon,
                            command=lambda k=key: self._defer(self.do_gesture, k))
         play_menu.add_separator()
-        self._menu_add(play_menu, "打飞机（chm）", icon="shoot",
+        self._menu_add(play_menu, "打飞机（chm / 郑迪隆）", icon="shoot",
                        command=lambda: self._defer(self.trigger_shooting))
         self._play_menu = play_menu
 
@@ -8441,6 +8488,7 @@ class DesktopPet:
         if background and self.user_busy:
             return
         self._speech_seq += 1
+        text = jp_gloss.add_gloss(text)
         if text == PENDING_TEXT:
             self.pending = text
             ms = ms or PENDING_MS
@@ -8495,7 +8543,11 @@ class DesktopPet:
         if self.prefetched:
             line, self.prefetched = self.prefetched, None
             # 攒的时候可能还没吃醋，拿出来先按现在的脾气剪一刀
-            self.speak(self._kaomoji_line(self.mood.shape(line)))
+            line = self.mood.shape(line)
+            if jp_gloss.has_kana(line):
+                self.speak(line)
+            else:
+                self.speak(self._kaomoji_line(line))
             return
         if not self._think("chatter", lambda: self.brain.chatter(),
                            fallback=lambda: random.choice(PHRASES)):
@@ -8783,7 +8835,9 @@ class DesktopPet:
             reply = str(data.get("reply") or "")
             # 冷战话多就换成短句，吃醋只留半句；冷战期连颜文字都不挂
             reply = mood.shape(reply, event)
-            if mood.allows_kaomoji():
+            # 有日语的回复下面会补一行中文，再挂颜文字就太挤、也容易把颜文字
+            # 折成两行；这种回复就不挂，让汉字当表情
+            if mood.allows_kaomoji() and not jp_gloss.has_kana(reply):
                 reply = self._kaomoji_line(reply, rate=0.7)
             self.speak(reply)
             # 生气的时候嘴上再热络也不加分：冷战只许扣不许加，吃醋最多 +1
@@ -8894,10 +8948,11 @@ class DesktopPet:
         self.brain.system_prompt = ai_client.persona_prompt(
             self._persona, romance=True)
         self._save_config()
-        self.speak(ai_client.ROMANCE_LINE)
+        line = ai_client.romance_line(self._persona)
+        self.speak(line)
         if self.chat_win is not None:
             self.chat_win.set_affection(self.affection)
-            self.chat_win.add_reply(ai_client.ROMANCE_LINE, [])
+            self.chat_win.add_reply(line, [])
             self.chat_win.refresh_romance()
         self._update_persona_menu()
         return True
