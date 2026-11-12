@@ -17,28 +17,50 @@ import random
 import time
 import tkinter as tk
 
-FONT = "Microsoft YaHei UI"
+FONT = "Microsoft YaHei UI"          # 正文（启动时按系统字体再挑一次）
+TITLE_FONT = "Microsoft YaHei UI"    # 标题（挑不到圆体就退回正文字体）
 
-# 配色：奶油底 + 莓红主色，跟聊天窗一个调子
-BG = "#fffaf6"
-SHELL = "#f4e5df"
+# 配色：卡通纸片风 —— 奶油纸底、粗描边、糖霜色块
+BG = "#fff7ea"          # 纸底
+SHELL = "#ffe6bf"       # 外框（奶油）
+PAPER = "#fffdf6"
 CARD = "#ffffff"
-INK = "#332a2e"
-INK_SOFT = "#6f6165"
-MUTED = "#a9999c"
-ACCENT = "#c9354a"
-ACCENT_DK = "#9c2436"
-PEACH = "#ffe3d9"
-PEACH_DK = "#ffd0c2"
-MINT = "#d9f0e1"
-MINT_DK = "#a9d9bd"
-GOLD = "#d99a2b"
-GOLD_LIGHT = "#ffe9c2"
-SHADOW = "#e8d8d2"
-DIRT = "#8d6350"
-DIRT_DK = "#6d4a3a"
-FIELD = "#f7ece3"
-BODY = "#b8805f"
+INK = "#3b2b3a"         # 深巧克力：描边 + 正文
+INK_SOFT = "#6d5b6b"
+MUTED = "#a08e9c"
+OUTLINE = "#3b2b3a"     # 统一描边色
+ACCENT = "#ff6f61"      # 珊瑚红
+ACCENT_DK = "#d94f43"
+PEACH = "#ffe1cf"
+PEACH_DK = "#ffc3a8"
+MINT = "#c8f0d4"
+MINT_DK = "#7ed3a1"
+SKY = "#c7e9ff"
+SUN = "#ffd166"
+GOLD = "#f4a62a"
+SHADOW = "#e2c9b4"
+DIRT = "#a9785a"
+DIRT_DK = "#7b5540"
+FIELD = "#f4e7d6"
+BODY = "#c08a63"
+
+
+def _detect_fonts(root):
+    """挑一套圆乎乎的字体（幼圆/华文琥珀），没有就用雅黑。"""
+    global FONT, TITLE_FONT
+    try:
+        import tkinter.font as tkfont
+        fams = set(tkfont.families(root))
+    except Exception:                            # noqa: BLE001
+        return
+    for name in ("幼圆", "YouYuan", "微软雅黑", "Microsoft YaHei UI"):
+        if name in fams:
+            FONT = name
+            break
+    for name in ("幼圆", "YouYuan", "微软雅黑", "Microsoft YaHei UI"):
+        if name in fams:
+            TITLE_FONT = name
+            break
 
 
 def _ease_out(t):
@@ -120,7 +142,12 @@ LINES = {
 
 
 class Pill:
-    """画布上的圆角按钮：悬停浮起、按下回弹。"""
+    """画布上的圆角按钮：悬停浮起、按下回弹。
+
+    注意：悬停只改颜色和坐标，**不删除重建**画布元素。以前这里重建，
+    鼠标底下的元素会反复消失又出现，Enter/Leave 来回触发把主线程打满，
+    看门狗就会判定卡死并重启进程。
+    """
 
     def __init__(self, game, x, y, w, h, text, command,
                  fill=ACCENT, fg="#ffffff", size=11, radius=None):
@@ -133,47 +160,92 @@ class Pill:
         self.enabled = True
         self.hover = False
         self.tag = "pill%d" % id(self)
+        self._ids = None
         self._draw()
 
     # ------------------------------------------------------------------ 画
+    def _points(self, x0, y0, x1, y1, r):
+        r = max(1, min(r, (x1 - x0) / 2.0, (y1 - y0) / 2.0))
+        pts = []
+        for cx, cy, start in ((x1 - r, y0 + r, -90), (x1 - r, y1 - r, 0),
+                              (x0 + r, y1 - r, 90), (x0 + r, y0 + r, 180)):
+            for i in range(5):
+                a = math.radians(start + 90.0 * i / 4.0)
+                pts.extend((cx + r * math.cos(a), cy + r * math.sin(a)))
+        return pts
+
     def _draw(self):
         c = self.g.c
         if c is None:
             return
         try:
-            c.delete(self.tag)
+            if self._ids is None:
+                pts = self._points(self.x + 1, self.y + 4,
+                                   self.x + self.w + 1, self.y + self.h + 4,
+                                   self.radius)
+                shadow = c.create_polygon(pts, smooth=True, splinesteps=12,
+                                          fill=OUTLINE, tags=(self.tag,))
+                pts = self._points(self.x, self.y, self.x + self.w,
+                                   self.y + self.h, self.radius)
+                body = c.create_polygon(pts, smooth=True, splinesteps=12,
+                                        fill=self.fill, outline=OUTLINE,
+                                        width=3, tags=(self.tag,))
+                text = c.create_text(self.x + self.w / 2.0,
+                                     self.y + self.h / 2.0, text=self.text,
+                                     fill=self.fg,
+                                     font=(FONT, self.size, "bold"),
+                                     tags=(self.tag,))
+                self._ids = (shadow, body, text)
+                c.tag_bind(self.tag, "<Enter>", self._on_enter)
+                c.tag_bind(self.tag, "<Leave>", self._on_leave)
+                c.tag_bind(self.tag, "<Button-1>", self._on_click)
         except tk.TclError:
+            self._ids = None
             return
-        dy = -1 if (self.hover and self.enabled) else 0
+        self._apply()
+
+    def _apply(self):
+        c = self.g.c
+        if c is None or self._ids is None:
+            return
+        shadow, body, text = self._ids
+        dy = -2 if (self.hover and self.enabled) else 0
         fill = self.fill
         if not self.enabled:
-            fill = "#ece2de"
+            fill = "#efe4dc"
         elif self.hover:
-            fill = _mix(self.fill, "#ffffff", 0.18)
-        fg = self.fg if self.enabled else "#b5a7a3"
+            fill = _mix(self.fill, "#ffffff", 0.22)
+        fg = self.fg if self.enabled else "#b3a5a0"
         x, y, w, h = self.x, self.y + dy, self.w, self.h
-        if self.enabled:
-            self.g.rrect(x, y + 2, x + w, y + h + 2, self.radius,
-                         fill=SHADOW, tags=(self.tag,))
-        self.g.rrect(x, y, x + w, y + h, self.radius,
-                     fill=fill, tags=(self.tag,))
-        c.create_text(x + w / 2.0, y + h / 2.0, text=self.text, fill=fg,
-                      font=(FONT, self.size, "bold"), tags=(self.tag,))
-        c.tag_bind(self.tag, "<Enter>", self._on_enter)
-        c.tag_bind(self.tag, "<Leave>", self._on_leave)
-        c.tag_bind(self.tag, "<Button-1>", self._on_click)
+        try:
+            c.coords(shadow, *self._points(x + 1, y + 4, x + w + 1,
+                                           y + h + 4, self.radius))
+            c.coords(body, *self._points(x, y, x + w, y + h, self.radius))
+            c.itemconfigure(body, fill=fill)
+            c.coords(text, x + w / 2.0, y + h / 2.0)
+            c.itemconfigure(text, text=self.text, fill=fg)
+        except tk.TclError:
+            pass
 
     def _on_enter(self, _e=None):
-        if not self.enabled:
+        if not self.enabled or self.hover:
             return
         self.hover = True
-        self.g.c.configure(cursor="hand2")
-        self._draw()
+        try:
+            self.g.c.configure(cursor="hand2")
+        except tk.TclError:
+            pass
+        self._apply()
 
     def _on_leave(self, _e=None):
+        if not self.hover:
+            return
         self.hover = False
-        self.g.c.configure(cursor="")
-        self._draw()
+        try:
+            self.g.c.configure(cursor="")
+        except tk.TclError:
+            pass
+        self._apply()
 
     def _on_click(self, _e=None):
         if not self.enabled:
@@ -186,12 +258,14 @@ class Pill:
     def set_enabled(self, on):
         if self.enabled != bool(on):
             self.enabled = bool(on)
-            self._draw()
+            if not self.enabled:
+                self.hover = False
+            self._apply()
 
     def set_text(self, text):
         if text != self.text:
             self.text = text
-            self._draw()
+            self._apply()
 
     def place(self, x, y, w=None, h=None):
         self.x, self.y = x, y
@@ -200,12 +274,13 @@ class Pill:
             self.radius = h // 2 if h is None else h // 2
         if h is not None:
             self.h = h
-        self._draw()
+        self._apply()
 
     def destroy(self):
+        self._ids = None
         try:
             self.g.c.delete(self.tag)
-        except tk.TclError:
+        except (tk.TclError, AttributeError):
             pass
 
 
@@ -286,30 +361,58 @@ class GameWindow:
     # ------------------------------------------------------------ 画外壳
     def _draw_shell(self):
         c = self.c
+        _detect_fonts(self.win)
         c.create_rectangle(0, 0, self.W, self.H, fill=SHELL, outline="")
-        self.rrect(2, 2, self.W - 2, self.H - 2, 18, fill=BG,
-                   outline=SHELL, width=2)
-        # 图标 + 标题
-        self.rrect(18, 18, 62, 62, 14, fill=self.ICON_COLOR)
-        c.create_text(40, 40, text=self.ICON, fill="#ffffff",
+        # 纸片外框（粗描边）
+        self.rrect(5, 5, self.W - 5, self.H - 5, 22, fill=BG,
+                   outline=OUTLINE, width=3)
+        self._draw_doodles()
+        # 图标（贴纸）
+        self.rrect(19, 22, 63, 66, 15, fill=OUTLINE)
+        self.rrect(17, 18, 61, 62, 15, fill=self.ICON_COLOR,
+                   outline=OUTLINE, width=3)
+        c.create_text(39, 40, text=self.ICON, fill="#ffffff",
                       font=(FONT, 17, "bold"))
-        c.create_text(76, 30, text=self.TITLE, fill=INK, anchor="w",
-                      font=(FONT, 15, "bold"))
+        # 标题（描边字）
+        self.c.create_text(75, 32, text=self.TITLE, fill=INK, anchor="w",
+                           font=(TITLE_FONT, 17, "bold"))
         if self.SUB:
-            c.create_text(76, 52, text=self.SUB, fill=MUTED, anchor="w",
+            c.create_text(75, 55, text=self.SUB, fill=INK_SOFT, anchor="w",
                           font=(FONT, 9))
         # 关闭按钮
-        self._close_pill = Pill(self, self.W - 46, 24, 28, 28, "✕",
-                                self.close, fill="#f0e2dd", fg=INK_SOFT,
+        self._close_pill = Pill(self, self.W - 44, 22, 28, 28, "✕",
+                                self.close, fill=CARD, fg=INK_SOFT,
                                 size=11, radius=14)
-        # 顶部分隔 + 底部提示
+        # 顶部分隔（虚线）+ 底部提示
         c.create_line(18, self.top - 8, self.W - 18, self.top - 8,
-                      fill=SHADOW, width=1)
+                      fill=SHADOW, width=2, dash=(6, 5))
         if self.HINT:
-            c.create_text(20, self.H - 16, text=self.HINT, fill=MUTED,
+            c.create_text(20, self.H - 15, text=self.HINT, fill=MUTED,
                           anchor="w", font=(FONT, 8))
-        c.create_text(self.W - 20, self.H - 16, text="拖动标题栏可以挪走",
+        c.create_text(self.W - 20, self.H - 15, text="拖动标题栏可以挪走",
                       fill=MUTED, anchor="e", font=(FONT, 8))
+
+    def _draw_doodles(self):
+        """角落里的纸片小装饰：星星、小圆点、云。"""
+        c = self.c
+        star = getattr(self, "_star", None)
+        if star is None:
+            return
+        for cx, cy, r, fill in ((self.W - 33, self.H - 40, 7, SUN),
+                                (26, self.H - 44, 5, PEACH_DK)):
+            star(cx, cy, r, fill)
+        for cx, cy in ((52, self.H - 36), (self.W - 46, self.H - 30)):
+            c.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=SKY,
+                          outline=OUTLINE, width=2)
+
+    def _star(self, cx, cy, r, fill, tags=()):
+        pts = []
+        for i in range(10):
+            a = math.radians(-90 + 36 * i)
+            rr = r if i % 2 == 0 else r * 0.45
+            pts.extend((cx + rr * math.cos(a), cy + rr * math.sin(a)))
+        return self.c.create_polygon(pts, fill=fill, outline=OUTLINE, width=2,
+                                     tags=tags)
 
     # ------------------------------------------------------------ 画图工具
     def rrect(self, x0, y0, x1, y1, r=12, **kw):
@@ -328,18 +431,46 @@ class GameWindow:
         return self.c.create_line(x0, y0, x1, y1, width=width,
                                   capstyle=tk.ROUND, **kw)
 
+    def capsule_ol(self, x0, y0, x1, y1, width, fill, outline=OUTLINE,
+                   outline_width=3, tags=()):
+        """带描边的圆头线（卡通手/手指用）。"""
+        self.c.create_line(x0, y0, x1, y1, width=width + outline_width * 2,
+                           fill=outline, capstyle=tk.ROUND, tags=tags)
+        return self.c.create_line(x0, y0, x1, y1, width=width, fill=fill,
+                                  capstyle=tk.ROUND, tags=tags)
+
     def txt(self, x, y, text, size=11, fill=INK, weight="normal",
             anchor="center", **kw):
         return self.c.create_text(x, y, text=text, fill=fill, anchor=anchor,
                                   font=(FONT, size, weight), **kw)
 
-    def card(self, x0, y0, x1, y1, r=14, fill=CARD, outline=None,
-             shadow=True, tags=()):
+    def txt_out(self, x, y, text, size=15, fill=INK, anchor="center",
+                outline=OUTLINE, weight="bold", tags=()):
+        """描边字：先用描边色在四周画一遍，再把字盖上去。
+
+        返回一个 tag 字符串（不是 item id），这样 itemconfigure(tag, ...)
+        能同时改到描边层和字面层。
+        """
+        self._ot_seq = getattr(self, "_ot_seq", 0) + 1
+        tag = "ot%d" % self._ot_seq
+        all_tags = tuple(tags) + (tag,)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            self.c.create_text(x + dx, y + dy, text=text, fill=outline,
+                               anchor=anchor, font=(FONT, size, weight),
+                               tags=all_tags)
+        self.c.create_text(x, y, text=text, fill=fill, anchor=anchor,
+                           font=(FONT, size, weight), tags=all_tags)
+        return tag
+
+    def card(self, x0, y0, x1, y1, r=14, fill=CARD, outline=OUTLINE,
+             shadow=True, shadow_dy=4, tags=()):
         if shadow:
-            self.rrect(x0, y0 + 2, x1, y1 + 3, r, fill=SHADOW,
+            self.rrect(x0, y0 + shadow_dy, x1, y1 + shadow_dy, r,
+                       fill=SHADOW if isinstance(shadow, bool) else str(shadow),
                        outline="", tags=tags)
         return self.rrect(x0, y0, x1, y1, r, fill=fill,
-                          outline=outline or "", width=1, tags=tags)
+                          outline=outline or "", width=3 if outline else 0,
+                          tags=tags)
 
     # ------------------------------------------------------------ 动效
     def click_ring(self, x, y, color=None):
@@ -601,18 +732,18 @@ class RPSGame(GameWindow):
         # 比分
         self._chip("你", 22)
         self._chip("它", self.W - 118, right=True)
-        self.score_you = self.txt(92, 98, "0", 18, ACCENT, "bold")
-        self.score_it = self.txt(self.W - 48, 98, "0", 18, INK, "bold")
+        self.score_you = self.txt(92, 98, "0", 20, ACCENT, "bold")
+        self.score_it = self.txt(self.W - 48, 98, "0", 20, INK, "bold")
 
         # 舞台：我方手 — VS — 它
-        self.c.create_oval(self.W / 2 - 92, 128, self.W / 2 + 92, 232,
-                           fill="#fff3ee", outline="")
+        self.rrect(self.W / 2 - 94, 126, self.W / 2 + 94, 234, 40,
+                   fill="#fff1e6", outline=OUTLINE, width=3)
         self.my_slot = (self.W / 2 - 58, 180)
         self.pet_slot = (self.W / 2 + 58, 180)
-        self.txt(self.W / 2, 180, "VS", 11, MUTED, "bold")
+        self.txt_out(self.W / 2, 180, "VS", 12, "#ffffff", weight="bold")
         self.my_hand_ids = []
         self.pet_hand_ids = []
-        self.result = self.txt(self.W / 2, 250, "出个手势吧", 11, INK_SOFT)
+        self.result = self.txt(self.W / 2, 252, "出个手势吧", 11, INK_SOFT)
 
         # 三个手势按钮
         self.tiles = {}
@@ -634,7 +765,7 @@ class RPSGame(GameWindow):
             self.tiles[hand] = (x, tile_w, tag)
 
         self.again = Pill(self, (self.W - 132) / 2.0, self.H - 58, 132, 30, "再来一局",
-                          self.reset, fill="#f0e2dd", fg=INK_SOFT, size=10)
+                          self.reset, fill=PEACH, fg=INK, size=10)
         self.again.set_enabled(False)
 
     def _chip(self, label, x, right=False):
@@ -648,41 +779,46 @@ class RPSGame(GameWindow):
         self.c.configure(cursor="hand2" if on else "")
         self.c.delete("hover%g" % x)
         if on:
-            self.rrect(x - 2, y - 4, x + w + 2, y + 78, 18,
-                       fill="", outline=PEACH_DK, width=2,
+            self.rrect(x - 3, y - 5, x + w + 3, y + 82, 18,
+                       fill="", outline=ACCENT, width=3,
                        tags=("hover%g" % x,))
 
     # ------------------------------------------------------------ 画手
     def draw_hand(self, cx, cy, size, kind, color, tags=()):
         ids = []
         s = size
+        ow = 3
         if kind == "石头":
             ids.append(self.rrect(cx - s * 0.78, cy - s * 0.72,
                                   cx + s * 0.78, cy + s * 0.74, s * 0.5,
-                                  fill=color, outline="", tags=tags))
+                                  fill=color, outline=OUTLINE, width=ow,
+                                  tags=tags))
             for i in (-1, 0, 1):
                 ids.append(self.c.create_oval(
                     cx + i * s * 0.42 - s * 0.16, cy - s * 0.92,
                     cx + i * s * 0.42 + s * 0.16, cy - s * 0.6,
-                    fill=_mix(color, "#ffffff", 0.1), outline="", tags=tags))
+                    fill=_mix(color, "#ffffff", 0.1), outline=OUTLINE,
+                    width=ow, tags=tags))
         elif kind == "剪刀":
-            ids.append(self.c.create_oval(cx - s * 0.34, cy + s * 0.34,
-                                          cx + s * 0.34, cy + s * 0.82,
-                                          fill=color, outline="", tags=tags))
             for dx in (-1, 1):
-                ids.append(self.capsule(
+                ids.append(self.capsule_ol(
                     cx + dx * s * 0.12, cy + s * 0.42,
                     cx + dx * s * 0.52, cy - s * 0.72, int(s * 0.34),
                     fill=color, tags=tags))
+            ids.append(self.c.create_oval(cx - s * 0.34, cy + s * 0.34,
+                                          cx + s * 0.34, cy + s * 0.82,
+                                          fill=color, outline=OUTLINE,
+                                          width=ow, tags=tags))
         else:
-            ids.append(self.rrect(cx - s * 0.66, cy - s * 0.34,
-                                  cx + s * 0.66, cy + s * 0.78, s * 0.34,
-                                  fill=color, outline="", tags=tags))
             for i in range(4):
                 fx = cx - s * 0.5 + i * s * 0.34
-                ids.append(self.capsule(
+                ids.append(self.capsule_ol(
                     fx, cy - s * 0.2, fx, cy - s * 0.86, int(s * 0.28),
                     fill=color, tags=tags))
+            ids.append(self.rrect(cx - s * 0.66, cy - s * 0.34,
+                                  cx + s * 0.66, cy + s * 0.78, s * 0.34,
+                                  fill=color, outline=OUTLINE, width=ow,
+                                  tags=tags))
         return ids
 
     def _clear(self, ids):
@@ -790,19 +926,22 @@ class GuessGame(GameWindow):
 
         # 大数字显示
         self.card(22, 84, self.W - 22, 164, 18, fill=CARD)
-        self.disp = self.txt(self.W / 2, 124, "?", 38, INK, "bold")
-        self.hint = self.txt(self.W / 2, 176, "在 1 ~ 100 之间", 9, MUTED)
+        self.disp = self.txt(self.W / 2, 124, "?", 42, ACCENT, "bold")
+        self.hint = self.txt(self.W / 2, 176, "在 1 ~ 100 之间", 10, INK_SOFT)
 
         # 范围条
         self.bar_ids = []
         self.bar_y = 200
         self.c.create_line(30, self.bar_y, self.W - 30, self.bar_y,
+                           fill=OUTLINE, width=14, capstyle=tk.ROUND)
+        self.c.create_line(30, self.bar_y, self.W - 30, self.bar_y,
                            fill=SHADOW, width=8, capstyle=tk.ROUND)
         self.bar = self.c.create_line(30, self.bar_y, self.W - 30, self.bar_y,
                                       fill=MINT_DK, width=8, capstyle=tk.ROUND)
-        self.lo_txt = self.txt(30, self.bar_y + 14, "1", 8, MUTED, anchor="w")
-        self.hi_txt = self.txt(self.W - 30, self.bar_y + 14, "100", 8, MUTED,
-                               anchor="e")
+        self.lo_txt = self.txt(30, self.bar_y + 15, "1", 8, INK_SOFT,
+                               anchor="w")
+        self.hi_txt = self.txt(self.W - 30, self.bar_y + 15, "100", 8,
+                               INK_SOFT, anchor="e")
 
         # 记录点
         self.hist_txt = self.txt(self.W / 2, 228, "", 9, INK_SOFT)
@@ -826,9 +965,9 @@ class GuessGame(GameWindow):
                         size=15 if primary else 16, radius=16)
             self.keys[k] = pill
 
-        self.again = Pill(self, self.W - 124, self.H - 58, 96, 30,
-                          "换一个数", self.reset, fill="#f0e2dd",
-                          fg=INK_SOFT, size=9)
+        self.again = Pill(self, (self.W - 104) / 2.0, self.H - 58, 104, 30,
+                          "换一个数", self.reset, fill=PEACH,
+                          fg=INK, size=9)
         self.again.set_enabled(False)
         for seq, fn in (("1", lambda e: self.press("1")),
                         ("2", lambda e: self.press("2")),
@@ -961,8 +1100,8 @@ class MemoryGame(GameWindow):
         self._deal()
 
         self.again = Pill(self, (self.W - 132) / 2.0, self.H - 58, 132, 30,
-                          "重新洗牌", self.reset, fill="#f0e2dd",
-                          fg=INK_SOFT, size=10)
+                          "重新洗牌", self.reset, fill=PEACH,
+                          fg=INK, size=10)
         self.again.set_enabled(False)
 
     def _deal(self):
@@ -993,16 +1132,20 @@ class MemoryGame(GameWindow):
         cx = x + self.CW / 2.0
         matched = i in self.matched
         if t < 0.5:
-            fill = "#7b5aa6" if not matched else "#c9b6e0"
-            self.card(cx - w / 2, y, cx + w / 2, y + self.CH, 14, fill=fill,
+            fill = "#8f7ae0" if not matched else "#cbbcff"
+            self.card(cx - w / 2, y, cx + w / 2, y + self.CH, 16, fill=fill,
                       shadow=False, tags=(tag,))
             if w > self.CW * 0.4:
-                self.txt(cx, y + self.CH / 2, "✦", 16, "#ffffff",
+                self.txt(cx, y + self.CH / 2 - 2, "✦", 17, "#ffffff",
                          tags=(tag,))
+                for dx in (-24, 24):
+                    self.c.create_oval(cx + dx - 3, y + self.CH - 22,
+                                       cx + dx + 3, y + self.CH - 16,
+                                       fill="#ffffff", outline="", tags=(tag,))
         else:
             sym = self.symbols[i]
             fill = MINT if matched else CARD
-            self.card(cx - w / 2, y, cx + w / 2, y + self.CH, 14, fill=fill,
+            self.card(cx - w / 2, y, cx + w / 2, y + self.CH, 16, fill=fill,
                       shadow=not matched, tags=(tag,))
             if w > self.CW * 0.4:
                 color = MINT_DK if matched else ACCENT
@@ -1103,14 +1246,14 @@ class MemoryGame(GameWindow):
 
 # ================================================================== 打地鼠
 class MoleGame(GameWindow):
-    W, H = 450, 448
+    W, H = 450, 470
     TITLE = "打地鼠"
     SUB = "30 秒，冒头就点"
     ICON = "◎"
     ICON_COLOR = "#5f9e6e"
     HINT = "点洞里冒头的地鼠 · 15 分以上算赢 · Esc 关掉"
     SECONDS = 30.0
-    RISE = 40.0              # 地鼠从洞里升起的像素
+    RISE = 34.0              # 地鼠从洞里升起的像素
 
     def build(self):
         self.score = 0
@@ -1122,46 +1265,55 @@ class MoleGame(GameWindow):
         self._spawn_acc = 0.0
 
         # 顶部计分 + 时间条
-        self.score_txt = self.txt(26, 96, "得分 0", 11, INK, "bold", anchor="w")
-        self.time_txt = self.txt(self.W - 26, 96, "30 秒", 10, MUTED,
+        self.score_txt = self.txt(28, 96, "得分 0", 12, INK, "bold",
+                                  anchor="w")
+        self.time_txt = self.txt(self.W - 26, 96, "30 秒", 10, INK_SOFT,
                                  anchor="e")
+        self.c.create_line(26, 114, self.W - 26, 114, fill=OUTLINE, width=14,
+                           capstyle=tk.ROUND)
         self.c.create_line(26, 114, self.W - 26, 114, fill=SHADOW, width=8,
                            capstyle=tk.ROUND)
         self.tbar = self.c.create_line(26, 114, self.W - 26, 114,
                                        fill=GOLD, width=8, capstyle=tk.ROUND)
 
         # 草地 + 九个洞
-        self.rrect(20, 128, self.W - 20, self.H - 74, 18, fill=FIELD)
+        self.rrect(20, 132, self.W - 20, self.H - 78, 22, fill=FIELD,
+                   outline=OUTLINE, width=3)
+        for i in range(0, 5):
+            gx = 52 + i * 88
+            self.c.create_polygon(gx - 7, 136, gx, 124, gx + 7, 136,
+                                  fill=MINT_DK, outline=OUTLINE, width=2)
         for i in range(9):
             r, c = divmod(i, 3)
             cx = 95 + c * 130
-            cy = 190 + r * 78
+            cy = 204 + r * 80
             self.c.create_oval(cx - 54, cy - 20, cx + 54, cy + 28,
                                fill=_mix(DIRT, "#ffffff", 0.25), outline="")
             self.c.create_oval(cx - 50, cy - 17, cx + 50, cy + 24,
-                               fill=DIRT_DK, outline="")
+                               fill=DIRT_DK, outline=OUTLINE, width=3)
             self.c.create_oval(cx - 45, cy - 13, cx + 45, cy + 20,
-                               fill="#33251f", outline="")
+                               fill="#3a2a22", outline="")
             self.holes.append((cx, cy))
         self.c.tag_bind("all", "<Button-1>", self._on_click, add="+")
         self.c.configure(cursor="tcross")
 
         self.again = Pill(self, (self.W - 132) / 2.0, self.H - 58, 132, 30,
-                          "再来一局", self.reset, fill="#f0e2dd",
-                          fg=INK_SOFT, size=10)
+                          "再来一局", self.reset, fill=PEACH,
+                          fg=INK, size=10)
         self.again.set_enabled(False)
 
     # ------------------------------------------------------------ 画地鼠
     def _draw_mole(self, cx, cy):
         """地鼠 + 盖住洞口的一层，出洞时只露上半截。"""
         ids = []
+        ow = 3
         ids.append(self.c.create_oval(cx - 30, cy - 30, cx + 30, cy + 32,
-                                      fill=BODY, outline=""))
+                                      fill=BODY, outline=OUTLINE, width=ow))
         for dx in (-26, 26):
             ids.append(self.c.create_oval(cx + dx - 10, cy - 35,
                                           cx + dx + 10, cy - 13,
                                           fill=_mix(BODY, "#5a3a2a", 0.22),
-                                          outline=""))
+                                          outline=OUTLINE, width=ow))
         ids.append(self.c.create_oval(cx - 18, cy - 8, cx + 18, cy + 28,
                                       fill=_mix(BODY, "#ffe9d6", 0.34),
                                       outline=""))
@@ -1171,10 +1323,10 @@ class MoleGame(GameWindow):
             ids.append(self.c.create_oval(cx + dx - 2, cy - 9, cx + dx + 2,
                                           cy - 5, fill="#ffffff", outline=""))
         ids.append(self.c.create_oval(cx - 6, cy + 3, cx + 6, cy + 13,
-                                      fill="#e8607a", outline=""))
+                                      fill="#e8607a", outline=OUTLINE, width=2))
         # 遮罩只盖住洞口里面那圈，外面的土沿还留着
         mask = self.c.create_oval(cx - 45, cy - 13, cx + 45, cy + 20,
-                                  fill="#33251f", outline="")
+                                  fill="#3a2a22", outline="")
         return ids, (mask,)
 
     def _remove(self, mole):

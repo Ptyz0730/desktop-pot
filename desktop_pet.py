@@ -57,6 +57,7 @@ import kaomoji
 import pet_games
 import pet_mood
 import pet_music
+import pet_radio
 
 APP_NAME = "桌面宠物"
 
@@ -2778,7 +2779,9 @@ class DanmakuFX:
         bottom = int(anchor[1] - 6)
         y = bottom - h
         left, top, right, bottom_edge = work_area(self.master)
-        x = max(left, min(right - w, x))
+        # 水平只保证"还有一截在屏幕里"：贴在屏幕边时整块居中会有一半在屏幕外，
+        # 那是对的（字还是从头顶正上方冒出来）；硬夹回屏幕里就会偏一头。
+        x = max(left - w + 60, min(right - 60, x))
         y = max(top, min(bottom_edge - h, y))
         return (x, y, w, h)
 
@@ -2845,7 +2848,25 @@ class DanmakuFX:
             pass
 
     # ---------------------------------------------------------- 运行
+    def _sync_rect(self, anchor):
+        """窗口矩形跟着宠物走：位置变了就把正在飘的字一起平移。
+
+        原来 rect 只在第一次算一次，宠物一走 / 被屏幕边缘夹住，字就留在
+        原地，看起来就是"弹幕错位"。
+        """
+        new = self._make_rect(anchor)
+        if self.rect is None:
+            self.rect = new
+            return
+        if tuple(self.rect) == tuple(new):
+            return
+        # 窗口挪了，字在窗口里不动 —— 看起来就是跟着头走。
+        # （以前这里还把每个字平移 dx/dy，结果窗口一动字就留在原地。）
+        self.rect = new
+
     def update(self, dt, anchor, active, now):
+        if self.items or active:
+            self._sync_rect(anchor)
         if active and len(self.items) < self.MAX_ITEMS:
             if not self.items or now - self._last_spawn >= self.SPAWN_GAP:
                 self._spawn(anchor, now)
@@ -2902,10 +2923,12 @@ class DanmakuFX:
         img, jp, cn = self._text_image()
         if self.rect is None:
             self.rect = self._make_rect(anchor)
-        _x0, _y0, w, h = self.rect
-        x = (w - img.width) / 2.0 + random.uniform(-0.18, 0.18) * w
+        x0, y0, w, h = self.rect
+        # 按"头顶那个点"定位（不是按矩形中心）：矩形被屏幕边缘夹住时也不会偏
+        x = anchor[0] - x0 - img.width / 2.0 + random.uniform(-16.0, 16.0)
         x = max(6.0, min(w - img.width - 6.0, x))
-        y = h - img.height - 8
+        y = anchor[1] - y0 - img.height - 8
+        y = max(4.0, min(h - img.height - 4.0, y))
         self.items.append(_DanmakuItem(
             img=img, x=x, y=y,
             vx=random.uniform(-9.0, 9.0),
@@ -5910,14 +5933,32 @@ class DesktopPet:
         self.mood = pet_mood.MoodEngine()
         # 音乐：music/ 里的歌自己选，播放时头顶气泡报歌名
         self.music = pet_music.MusicPlayer()
+        # 在线电台专用：MCI 打开流会阻塞 25 秒以上，所以它跑在自己的线程里，
+        # 这里只发命令、读状态（见 pet_music.StreamPlayer）
+        self.stream = pet_music.StreamPlayer()
         self.music_files = pet_music.scan_music(MUSIC_DIR)
         self.music_name = ""          # 当前（或上次）那一首的文件名
         self.music_paused = False
         self.music_volume = 60
+        # 在线电台：music_online 为真时 music 放的是网络流；radio_list 是当前
+        # 这一批台（切台在上面的列表里绕圈），radio_station 是正在放的那个。
+        self.music_online = False
+        self.radio_station = None
+        self.radio_list = []
+        self.radio_index = -1
+        self._radio_retry = 0
+        self._radio_dialog = None
+        self._radio_tick_at = 0.0
         try:
             mcfg = self.cfg.get("music") or {}
             self.music_name = str(mcfg.get("file") or "")
             self.music_volume = max(0, min(100, int(mcfg.get("volume", 60))))
+            online = mcfg.get("online") or {}
+            url = str(online.get("url") or "")
+            if url.lower().startswith(("http://", "https://")):
+                self.radio_station = {"name": str(online.get("name") or "在线电台"),
+                                      "url": url}
+                self.music_name = self.radio_station["name"]
         except (TypeError, ValueError, AttributeError):
             self.music_volume = 60
         self._music_next_check = 0.0
@@ -6153,8 +6194,12 @@ class DesktopPet:
                          "kaomoji": self.kaomoji_enabled,
                          "web_links": [dict(x) for x in (self.cfg.get("web_links") or [])
                                        if isinstance(x, dict)],
-                         "music": {"file": self.music_name,
-                                   "volume": self.music_volume}})
+                         "music": {"file": "" if self.music_online else self.music_name,
+                                   "volume": self.music_volume,
+                                   "online": ({"name": self.radio_station.get("name", ""),
+                                               "url": self.radio_station.get("url", "")}
+                                              if (self.music_online and self.radio_station)
+                                              else {})}})
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
                 json.dump(self.cfg, fh, ensure_ascii=False, indent=2)
@@ -8112,6 +8157,13 @@ class DesktopPet:
             return
         try:
             menu.delete(0, "end")
+            menu.add_command(label="在线电台…  （不用 music 文件夹）",
+                             command=lambda: self._defer(self.open_radio))
+            if self.music_online and self.radio_station:
+                menu.add_command(
+                    label="正在收听：%s" % self.radio_station.get("name", ""),
+                    state="disabled")
+            menu.add_separator()
             for title, path in self.music_files:
                 menu.add_radiobutton(
                     label=title, value=os.path.basename(path),
@@ -8155,21 +8207,33 @@ class DesktopPet:
 
     def show_music_bubble(self):
         """头顶常驻「正在播放：歌名」+ 一排按钮（上一首/←15s/停止/15s→/下一首）。"""
-        if self.bubble is None or not self.music.is_open:
+        if self.bubble is None or not self._music_active():
             return False
-        title = pet_music.title_of(self.music.path)
-        self._music_bubble_wanted = True
-        buttons = [("«", self.prev_music),
-                   ("←15s", lambda: self.seek_music(-15)),
-                   ("停止", self.stop_music),
-                   ("15s→", lambda: self.seek_music(15)),
-                   ("»", self.next_music)]
+        if self.music_online and self.radio_station:
+            title = "电台：%s" % self.radio_station.get("name", "在线电台")
+            state = self.stream.status()
+            if state == "opening":
+                title += "（连接中…）"
+            elif state in ("error", "stopped"):
+                title += "（断了）"
+            self._music_bubble_wanted = True
+            buttons = [("«", self.prev_station),
+                       ("停止", self.stop_music),
+                       ("»", self.next_station)]
+        else:
+            title = "正在播放：%s" % pet_music.title_of(self.music.path)
+            self._music_bubble_wanted = True
+            buttons = [("«", self.prev_music),
+                       ("←15s", lambda: self.seek_music(-15)),
+                       ("停止", self.stop_music),
+                       ("15s→", lambda: self.seek_music(15)),
+                       ("»", self.next_music)]
         keymap = {"<space>": self._key_stop_music,
                   "<Left>": lambda e: self._key_seek(-15),
                   "<Right>": lambda e: self._key_seek(15),
                   "<KeyPress-bracketleft>": self._key_switch_music(-1),
                   "<KeyPress-bracketright>": self._key_switch_music(1)}
-        ok = self.bubble.show_controls("正在播放：%s" % title, buttons,
+        ok = self.bubble.show_controls(title, buttons,
                                        self.head_anchor(), want_layered=self.layered,
                                        avoid=self._chat_rect(), keymap=keymap)
         self._music_bubble_at = self._now() + self.MUSIC_BUBBLE_IDLE_S
@@ -8205,7 +8269,7 @@ class DesktopPet:
 
     def seek_music(self, delta):
         """delta 秒：负数是后退，正数是快进。"""
-        if not self.music.is_open:
+        if self.music_online or not self.music.is_open:
             return False
         try:
             pos = self.music.seek(delta)
@@ -8220,13 +8284,13 @@ class DesktopPet:
         return True
 
     def _key_stop_music(self, event=None):
-        if self.music.is_open:
+        if self._music_active():
             self.stop_music()
             return "break"
         return None
 
     def _key_seek(self, delta):
-        if self.music.is_open:
+        if self._music_active() and not self.music_online:
             self.seek_music(delta)
             return "break"
         return None
@@ -8257,6 +8321,9 @@ class DesktopPet:
             self.music.set_volume(self.music_volume)
         except (pet_music.MusicError, RuntimeError) as exc:
             self._music_log("music: volume failed %r" % (exc,))
+        self.music_online = False
+        self.radio_station = None
+        self._radio_retry = 0
         self.music_name = os.path.basename(path)
         self.music_paused = False
         try:
@@ -8269,7 +8336,100 @@ class DesktopPet:
         self._save_config()
         return True
 
+    def play_radio(self, station, stations=None, announce=True):
+        """放一个在线电台（station 是 dict：name / url / tags）。"""
+        station = station if isinstance(station, dict) else {}
+        url = str(station.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            return False
+        try:
+            self.music.close()      # 本地歌先关掉，免得两个设备一起响
+        except (pet_music.MusicError, RuntimeError):
+            pass
+        try:
+            # 立刻返回；真正的 MCI open 在 StreamPlayer 的线程里（可能要几十秒）
+            self.stream.play(url)
+        except (pet_music.MusicError, RuntimeError) as exc:
+            self._music_log("radio: play %r failed %r" % (url, exc))
+            self.speak("（这个台放不出来：%s）" % exc)
+            return False
+        try:
+            self.stream.set_volume(self.music_volume)
+        except (pet_music.MusicError, RuntimeError) as exc:
+            self._music_log("radio: volume failed %r" % (exc,))
+        name = str(station.get("name") or "在线电台")
+        self.music_online = True
+        self.music_paused = False
+        self._radio_retry = 0
+        self.radio_station = {"name": name, "url": url,
+                              "tags": station.get("tags", "")}
+        if stations:
+            self.radio_list = list(stations)
+            self.radio_index = -1
+            for i, st in enumerate(self.radio_list):
+                if str(st.get("url")) == url:
+                    self.radio_index = i
+                    break
+        self.music_name = name
+        try:
+            self.music_var.set(name)
+        except (tk.TclError, AttributeError):
+            pass
+        if announce:
+            self.speak("♪ 连接中：%s" % name)
+            self.show_music_bubble()
+        self._save_config()
+        return True
+
+    def _radio_switch(self, step, announce=True):
+        """在 radio_list 里换台（首尾相接）；没有列表就重放当前台。"""
+        if not self.radio_list:
+            if self.radio_station:
+                return self.play_radio(self.radio_station, announce=announce)
+            return False
+        n = len(self.radio_list)
+        cur = (self.radio_station or {}).get("url")
+        idx = self.radio_index if 0 <= self.radio_index < n else -1
+        for k in range(1, n + 1):
+            st = self.radio_list[(idx + int(step) * k) % n]
+            if n > 1 and str(st.get("url")) == cur:
+                continue
+            if self.play_radio(st, stations=self.radio_list, announce=announce):
+                return True
+        return False
+
+    def next_station(self):
+        return self._radio_switch(1)
+
+    def prev_station(self):
+        return self._radio_switch(-1)
+
+    def open_radio(self):
+        """打开「在线电台」窗口（右键 → 音乐 → 在线电台…）。"""
+        try:
+            if self._radio_dialog is None:
+                self._radio_dialog = pet_radio.RadioDialog(self)
+            self._radio_dialog.show()
+        except Exception as exc:            # noqa: BLE001
+            self.speak("（电台窗口没打开：%s）" % exc)
+            return False
+        return True
+
     def toggle_music(self):
+        if self.music_online:
+            state = self.stream.status()
+            if state == "paused":
+                self.stream.resume()
+                self.music_paused = False
+                self.show_music_bubble()
+            elif state in ("playing", "opening"):
+                self.stream.pause()
+                self.music_paused = True
+                self._hide_music_bubble()
+                self.speak("先停一下：%s" % (self.radio_station or {}).get("name", "电台"))
+            else:
+                return self.play_radio(self.radio_station or {}, announce=False)
+            return True
         if not self.music.is_open:
             return self.play_music()
         if self.music_paused:
@@ -8297,7 +8457,13 @@ class DesktopPet:
             self.music.close()
         except (pet_music.MusicError, RuntimeError) as exc:
             self._music_log("music: close failed %r" % (exc,))
+        try:
+            self.stream.close()
+        except (pet_music.MusicError, RuntimeError) as exc:
+            self._music_log("radio: close failed %r" % (exc,))
         self.music_paused = False
+        self.music_online = False
+        self._radio_retry = 0
         self._hide_music_bubble()
         self.speak("不放了。")
 
@@ -8306,6 +8472,8 @@ class DesktopPet:
 
         原来在放就接着放；原来是暂停状态，就停在新歌的开头（不擅自开始放）。
         """
+        if self.music_online:
+            return self._radio_switch(step)
         if not self.music_files:
             return False
         names = [os.path.basename(p) for _t, p in self.music_files]
@@ -8328,7 +8496,7 @@ class DesktopPet:
 
     def _key_switch_music(self, step):
         def handler(event=None):
-            if self.music.is_open:
+            if self._music_active():
                 self._switch_music(step)
                 return "break"
             return None
@@ -8442,6 +8610,10 @@ class DesktopPet:
     def _music_volume(self, delta):
         self.music_volume = max(0, min(100, self.music_volume + delta))
         self.music.set_volume(self.music_volume)
+        try:
+            self.stream.set_volume(self.music_volume)
+        except (pet_music.MusicError, RuntimeError):
+            pass
         self._fill_music_menu()
         self.speak("音量 %d%%" % self.music_volume)
         self._save_config()
@@ -8459,7 +8631,39 @@ class DesktopPet:
             self._music_log("music: open folder failed %r" % (exc,))
 
     def _music_tick(self, now):
-        """一首放完了自动接下一首（按文件名顺序，最后一首绕回第一首）。"""
+        """一首放完了自动接下一首；在线电台连接超时/断了就换台。"""
+        if self.music_online:
+            if self.music_paused:
+                return
+            state = self.stream.status()
+            if state == "playing":
+                self._radio_retry = 0
+                return
+            if state == "opening":
+                # 开流可能要 25 秒；超过 OPEN_TIMEOUT 就当这个台连不上
+                if self.stream.waited() < pet_music.StreamPlayer.OPEN_TIMEOUT:
+                    return
+                self.stream.give_up("连接超时")
+                state = "error"
+            if now < self._radio_tick_at:
+                return
+            self._radio_tick_at = now + 3.0
+            self._music_log("radio: %s" % (state or "idle"))
+            if state == "error" and self._radio_retry < 1 and self.radio_station:
+                self._radio_retry += 1
+                try:
+                    self.stream.play(self.radio_station["url"])
+                    self.stream.set_volume(self.music_volume)
+                    return
+                except (pet_music.MusicError, RuntimeError) as exc:
+                    self._music_log("radio: retry failed %r" % (exc,))
+            self._radio_retry = 0
+            if not self._radio_switch(1, announce=False):
+                self.speak("电台断了。")
+                self.stop_music()
+            else:
+                self.show_music_bubble()
+            return
         if not self.music_files:
             return
         if not self.music.is_open or self.music_paused:
@@ -8470,6 +8674,12 @@ class DesktopPet:
         index = names.index(self.music_name) if self.music_name in names else -1
         nxt = self.music_files[(index + 1) % len(self.music_files)][1]
         self.play_music(nxt)
+
+    def _music_active(self):
+        """本地歌或电台，只要有一个在放/暂停/连接中，就算"音乐在跑"。"""
+        if self.music_online:
+            return self.stream.is_open
+        return self.music.is_open
 
     def _kaomoji_line(self, text, mood=None, rate=1.0):
         """给它自己说的话贴一个颜文字（关掉就原样返回）。"""
