@@ -57,6 +57,7 @@ import kaomoji
 import pet_games
 import pet_mood
 import pet_music
+import pet_persona
 import pet_radio
 
 APP_NAME = "桌面宠物"
@@ -6028,6 +6029,10 @@ class DesktopPet:
         # 压层级等第一个 tick 再做：这时候窗口真的映射出来了，SetWindowPos
         # 不会把还没生效的 wm geometry 吃掉（否则宠物会蹲在屏幕左上角）
         self._pending_lower = True
+        # 自定义人设：存在配置里，启动时注册回 ai_client（菜单、提示词、语气表同一套）
+        self.custom_personas = {}
+        self.persona_editor = None
+        self._load_custom_personas()
         self._build_menu()
         # 只挂托盘图标（右下角「^」里）；拿不到也不在任务栏留按钮
         self._install_tray()
@@ -6192,6 +6197,8 @@ class DesktopPet:
                          "romance": self.romance,
                          "brain": self.brain.export(),
                          "kaomoji": self.kaomoji_enabled,
+                         "custom_personas": dict(
+                             getattr(self, "custom_personas", {}) or {}),
                          "web_links": [dict(x) for x in (self.cfg.get("web_links") or [])
                                        if isinstance(x, dict)],
                          "music": {"file": "" if self.music_online else self.music_name,
@@ -7229,6 +7236,10 @@ class DesktopPet:
                 label="%s（%s）" % (ai_client.persona_display_name(key), key),
                 value=key, variable=self.persona_var,
                 command=lambda k=key: self._defer(self.set_persona, k))
+        persona_menu.add_separator()
+        self._menu_add(persona_menu, "编辑人设…", icon="key",
+                       command=lambda: self._defer(self.open_persona_editor))
+        self._persona_menu = persona_menu
         ai_menu.add_cascade(label="这张图的人设", menu=persona_menu)
         self._affection_menu = ai_menu
 
@@ -8992,6 +9003,12 @@ class DesktopPet:
         self.speak("好，我是%s。" % ai_client.persona_display_name(key))
 
     def _update_persona_menu(self):
+        menu = getattr(self, "_persona_menu", None)
+        if menu is not None:
+            try:
+                self._reload_persona_menu()
+            except tk.TclError:
+                pass
         menu = getattr(self, "_affection_menu", None)
         if menu is None:
             return
@@ -9005,6 +9022,117 @@ class DesktopPet:
                     break
             if getattr(self, "persona_var", None) is not None:
                 self.persona_var.set(self._persona)
+        except tk.TclError:
+            pass
+
+    def open_persona_editor(self):
+        """打开人设编辑器（单开）。"""
+        if getattr(self, "persona_editor", None) is not None:
+            try:
+                self.persona_editor.show()
+                return
+            except Exception:               # noqa: BLE001
+                self.persona_editor = None
+        try:
+            self.persona_editor = pet_persona.PetPersonaDialog(self).show()
+        except Exception as exc:            # noqa: BLE001
+            self.persona_editor = None
+            self.speak("人设编辑器打不开：%s" % exc)
+
+    def _load_custom_personas(self):
+        """把配置里的自定义人设注册进 ai_client（启动、改完都跑一遍）。"""
+        raw = self.cfg.get("custom_personas")
+        if not isinstance(raw, dict):
+            raw = {}
+        clean = {}
+        for key, data in raw.items():
+            if not isinstance(data, dict):
+                continue
+            key = str(key or "").strip()
+            prompt = str(data.get("prompt") or "").strip()
+            if not key or not prompt or key in ai_client.BUILTIN_PERSONAS:
+                continue
+            tones = pet_persona.normalize_tones(data.get("tones"))
+            clean[key] = {
+                "name": str(data.get("name") or key).strip() or key,
+                "hint": str(data.get("hint") or "").strip(),
+                "prompt": prompt,
+                "tones": [[t, s] for t, s in tones],
+                "romance_line": str(data.get("romance_line") or "").strip(),
+            }
+            ai_client.register_persona(
+                key, name=clean[key]["name"], prompt=prompt,
+                hint=clean[key]["hint"], tones=tones,
+                romance_line=clean[key]["romance_line"], romance=True)
+        self.custom_personas = clean
+
+    def save_custom_persona(self, key, data):
+        """存一个人设：写配置 + 注册 + 刷新菜单 + 正在用的话立刻换提示词。"""
+        key = str(key or "").strip()
+        if not key or key in ai_client.BUILTIN_PERSONAS:
+            return False
+        tones = pet_persona.normalize_tones((data or {}).get("tones"))
+        item = {
+            "name": str((data or {}).get("name") or key).strip() or key,
+            "hint": str((data or {}).get("hint") or "").strip(),
+            "prompt": str((data or {}).get("prompt") or "").strip(),
+            "tones": [[t, s] for t, s in tones],
+            "romance_line": str((data or {}).get("romance_line") or "").strip(),
+        }
+        if not item["prompt"]:
+            return False
+        self.custom_personas[key] = item
+        ai_client.register_persona(
+            key, name=item["name"], prompt=item["prompt"], hint=item["hint"],
+            tones=tones, romance_line=item["romance_line"], romance=True)
+        self.cfg["custom_personas"] = dict(self.custom_personas)
+        self._reload_persona_menu()
+        if getattr(self, "_persona", None) == key:
+            self.brain.system_prompt = ai_client.persona_prompt(
+                key, romance=self.romance)
+            self._update_persona_menu()
+        self._save_config()
+        return True
+
+    def delete_custom_persona(self, key):
+        """删一个自定义人设；正在用的话退回默认人设。"""
+        key = str(key or "").strip()
+        if not key or key not in self.custom_personas:
+            return False
+        self.custom_personas.pop(key, None)
+        ai_client.forget_persona(key)
+        self.cfg["custom_personas"] = dict(self.custom_personas)
+        personas = self.cfg.get("personas")
+        if isinstance(personas, dict):
+            for image, name in list(personas.items()):
+                if name == key:
+                    personas[image] = DEFAULT_PERSONA
+        if getattr(self, "_persona", None) == key:
+            self._persona = None
+            self._apply_persona()
+        self._reload_persona_menu()
+        self._save_config()
+        return True
+
+    def _reload_persona_menu(self):
+        """按当前的 PERSONA_PROMPTS 重建「这张图的人设」子菜单。"""
+        menu = getattr(self, "_persona_menu", None)
+        if menu is None:
+            return
+        menu.delete(0, "end")
+        current = getattr(self, "_persona", DEFAULT_PERSONA)
+        if getattr(self, "persona_var", None) is None:
+            self.persona_var = tk.StringVar(value=current)
+        for key in ai_client.PERSONA_PROMPTS:
+            menu.add_radiobutton(
+                label="%s（%s）" % (ai_client.persona_display_name(key), key),
+                value=key, variable=self.persona_var,
+                command=lambda k=key: self._defer(self.set_persona, k))
+        menu.add_separator()
+        self._menu_add(menu, "编辑人设…", icon="key",
+                       command=lambda: self._defer(self.open_persona_editor))
+        try:
+            self.persona_var.set(current)
         except tk.TclError:
             pass
 

@@ -13,6 +13,8 @@
 Esc / 右上角 ✕ 关掉；玩完它会在气泡里点评一句，好感度给一点点（每局一次）。
 """
 import math
+import sys
+import os
 import random
 import time
 import tkinter as tk
@@ -82,6 +84,54 @@ def _mix(color, other, k):
         return color
     return "#%02x%02x%02x" % tuple(
         int(round(a[i] + (b[i] - a[i]) * k)) for i in range(3))
+
+
+EMOJI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "assets", "emoji")
+
+HAND_FILES = {"石头": "fist.png", "剪刀": "scissors.png", "布": "hand.png"}
+SYMBOL_FILES = {"♠": "spade.png", "♥": "heart.png", "♦": "diamond.png",
+                "♣": "club.png", "★": "star.png", "●": "circle.png"}
+
+_EMOJI_CACHE = {}
+
+
+def _emoji_path(name):
+    """素材可能在项目里，也可能被打进 exe（_MEIPASS）。"""
+    bases = [EMOJI_DIR]
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        bases.insert(0, os.path.join(mei, "assets", "emoji"))
+    for base in bases:
+        path = os.path.join(base, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def emoji_image(master, name, size):
+    """按尺寸缓存的 PhotoImage；素材缺失时返回 None（调用方退回画矢量）。
+
+    PhotoImage 一定要挂在**主 root** 上：挂在游戏窗口上时，窗口一关图片就被
+    销毁，别的画布还引用着它就变成野指针（Tk 会直接崩）。
+    """
+    key = (name, int(size))
+    img = _EMOJI_CACHE.get(key)
+    if img is not None:
+        return img
+    path = _emoji_path(name)
+    if path is None:
+        return None
+    try:
+        from PIL import Image, ImageTk
+        root = getattr(tk, "_default_root", None) or master
+        im = Image.open(path).convert("RGBA")
+        im = im.resize((int(size), int(size)), Image.LANCZOS)
+        img = ImageTk.PhotoImage(im, master=root)
+    except Exception:                       # noqa: BLE001
+        return None
+    _EMOJI_CACHE[key] = img
+    return img
 
 
 def _work_area(root):
@@ -209,7 +259,7 @@ class Pill:
         if c is None or self._ids is None:
             return
         shadow, body, text = self._ids
-        dy = -2 if (self.hover and self.enabled) else 0
+        dy = 0
         fill = self.fill
         if not self.enabled:
             fill = "#efe4dc"
@@ -231,20 +281,12 @@ class Pill:
         if not self.enabled or self.hover:
             return
         self.hover = True
-        try:
-            self.g.c.configure(cursor="hand2")
-        except tk.TclError:
-            pass
         self._apply()
 
     def _on_leave(self, _e=None):
         if not self.hover:
             return
         self.hover = False
-        try:
-            self.g.c.configure(cursor="")
-        except tk.TclError:
-            pass
         self._apply()
 
     def _on_click(self, _e=None):
@@ -633,7 +675,6 @@ class GameWindow:
             return
         self._drag_from = (e.x_root - self.win.winfo_x(),
                            e.y_root - self.win.winfo_y())
-        self.c.configure(cursor="fleur")
 
     def _drag_move(self, e):
         if not self._drag_from:
@@ -643,7 +684,6 @@ class GameWindow:
 
     def _drag_end(self, _e=None):
         self._drag_from = None
-        self.c.configure(cursor="")
 
     def close(self):
         for job in self._jobs:
@@ -723,6 +763,8 @@ class RPSGame(GameWindow):
         self.you = self.it = self.rounds = 0
         self.done = False
         self.busy = False
+        self.hover_ids = {}
+        self.card_ids = {}
         self._awarded = 0
         self._shake_item = None
         self._reveal = 1.0
@@ -754,12 +796,15 @@ class RPSGame(GameWindow):
             tag = "tile%d" % i
             self.card(x, 278, x + tile_w, 356, 16, fill=CARD, tags=(tag,))
             cx, cy = x + tile_w / 2.0, 316
-            self.draw_hand(cx, cy, 24, hand, ACCENT_DK, tags=(tag,))
+            self._hand_art(cx, cy - 2, hand, 54, tag)
             self.txt(cx, 344, hand, 9, MUTED, tags=(tag,))
+            # 悬停只改这张卡片的描边颜色（不能在光标底下新建 item：
+            # 新 item 会盖住卡片，Tk 就在 Enter/Leave 之间来回抖成死循环）
+            self.card_ids[hand] = self.c.find_withtag(tag)[0]
             self.c.tag_bind(tag, "<Enter>",
-                            lambda e, x=x, w=tile_w: self._hover_tile(x, 278, w, True))
+                            lambda e, h=hand: self._hover_tile(h, True))
             self.c.tag_bind(tag, "<Leave>",
-                            lambda e, x=x: self._hover_tile(x, 278, tile_w, False))
+                            lambda e, h=hand: self._hover_tile(h, False))
             self.c.tag_bind(tag, "<Button-1>",
                             lambda e, h=hand: self.play(h))
             self.tiles[hand] = (x, tile_w, tag)
@@ -773,17 +818,31 @@ class RPSGame(GameWindow):
         self.card(x, 78, x + w, 120, 14, fill=CARD)
         self.txt(x + 16, 99, label, 9, MUTED, anchor="w")
 
-    def _hover_tile(self, x, y, w, on):
+    def _hover_tile(self, hand, on):
         if self.busy or self.done:
             return
-        self.c.configure(cursor="hand2" if on else "")
-        self.c.delete("hover%g" % x)
-        if on:
-            self.rrect(x - 3, y - 5, x + w + 3, y + 82, 18,
-                       fill="", outline=ACCENT, width=3,
-                       tags=("hover%g" % x,))
+        item = self.card_ids.get(hand)
+        if item is not None:
+            try:
+                self.c.itemconfigure(item, outline=ACCENT if on else OUTLINE,
+                                     width=3)
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------ 画手
+    def _hand_art(self, cx, cy, kind, size, tag):
+        """手势用 OpenMoji 图；素材缺失时才退回矢量画。"""
+        img = emoji_image(self.win, HAND_FILES.get(kind, ""), size)
+        if img is not None:
+            return [self.c.create_image(cx, cy, image=img, tags=(tag,))]
+        return [self.draw_hand(cx, cy, size * 0.42, kind, ACCENT_DK, tags=(tag,))]
+
+    def _hand_art_big(self, cx, cy, kind, color, tags=()):
+        img = emoji_image(self.win, HAND_FILES.get(kind, ""), 104)
+        if img is not None:
+            return [self.c.create_image(cx, cy, image=img, tags=tags)]
+        return self.draw_hand(cx, cy, 30, kind, color, tags=tags)
+
     def draw_hand(self, cx, cy, size, kind, color, tags=()):
         ids = []
         s = size
@@ -834,12 +893,12 @@ class RPSGame(GameWindow):
         if who == "me":
             self.my_hand_ids = self._clear(self.my_hand_ids)
             if kind:
-                self.my_hand_ids = self.draw_hand(slot[0], slot[1], 30, kind,
+                self.my_hand_ids = self._hand_art_big(slot[0], slot[1], kind,
                                                   color)
         else:
             self.pet_hand_ids = self._clear(self.pet_hand_ids)
             if kind:
-                self.pet_hand_ids = self.draw_hand(slot[0], slot[1], 30, kind,
+                self.pet_hand_ids = self._hand_art_big(slot[0], slot[1], kind,
                                                    color)
 
     # ------------------------------------------------------------ 一局
@@ -1148,14 +1207,16 @@ class MemoryGame(GameWindow):
             self.card(cx - w / 2, y, cx + w / 2, y + self.CH, 16, fill=fill,
                       shadow=not matched, tags=(tag,))
             if w > self.CW * 0.4:
-                color = MINT_DK if matched else ACCENT
-                self.txt(cx, y + self.CH / 2, sym, 28, color, "bold",
-                         tags=(tag,))
+                img = emoji_image(self.win, SYMBOL_FILES.get(sym, ""), 52)
+                if img is not None:
+                    self.c.create_image(cx, y + self.CH / 2, image=img,
+                                        tags=(tag,))
+                else:
+                    color = MINT_DK if matched else ACCENT
+                    self.txt(cx, y + self.CH / 2, sym, 28, color, "bold",
+                             tags=(tag,))
         self.c.tag_bind(tag, "<Button-1>", lambda e, ii=i: self.flip(ii))
-        self.c.tag_bind(tag, "<Enter>",
-                        lambda e: self.c.configure(cursor="hand2"))
-        self.c.tag_bind(tag, "<Leave>",
-                        lambda e: self.c.configure(cursor=""))
+
 
     def flip(self, idx):
         if self.done or self.locked or idx in self.matched:
@@ -1295,7 +1356,6 @@ class MoleGame(GameWindow):
                                fill="#3a2a22", outline="")
             self.holes.append((cx, cy))
         self.c.tag_bind("all", "<Button-1>", self._on_click, add="+")
-        self.c.configure(cursor="tcross")
 
         self.again = Pill(self, (self.W - 132) / 2.0, self.H - 58, 132, 30,
                           "再来一局", self.reset, fill=PEACH,
@@ -1425,7 +1485,6 @@ class MoleGame(GameWindow):
 
     def _finish(self):
         self.done = True
-        self.c.configure(cursor="")
         for mole in list(self.moles):
             self._remove(mole)
         self.again.set_enabled(True)
@@ -1458,7 +1517,6 @@ class MoleGame(GameWindow):
         self._awarded = 0
         self.time_left = self.SECONDS
         self._spawn_acc = 0.0
-        self.c.configure(cursor="tcross")
         self.c.itemconfigure(self.score_txt, text="得分 0", fill=INK)
         self.c.itemconfigure(self.time_txt, text="30 秒")
         self.c.coords(self.tbar, 26, 114, self.W - 26, 114)

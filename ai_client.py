@@ -473,6 +473,63 @@ def affection_tone(value, persona=None):
     return table[-1][1]
 
 
+BUILTIN_PERSONAS = tuple(PERSONA_PROMPTS)
+
+
+def register_persona(key, name=None, prompt=None, hint=None, tones=None,
+                     romance_line=None, romance=False):
+    """运行时登记一个人设（自定义人设走这里，内置的那几个也走同一套表）。
+
+    tones 可以是 ((81, 文本), (61, …) …)，也可以是五条文本（从低到高），
+    统一按阈值排好序塞进 PERSONA_TONES。
+    """
+    global ROMANCE_PERSONAS
+    key = str(key or "").strip()
+    if not key:
+        raise ValueError("人设名不能为空")
+    if prompt is not None and str(prompt).strip():
+        PERSONA_PROMPTS[key] = str(prompt).strip()
+        PERSONA_NAMES[key] = str(name or key).strip() or key
+    if hint is not None and str(hint).strip():
+        PERSONA_HINTS[key] = str(hint).strip()
+    if tones:
+        table = []
+        for item in tones:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                try:
+                    thr = int(item[0])
+                except (TypeError, ValueError):
+                    continue
+                text = str(item[1]).strip()
+            else:
+                continue
+            if text:
+                table.append((thr, text))
+        if table:
+            PERSONA_TONES[key] = tuple(sorted(table, key=lambda t: -t[0]))
+    if romance_line is not None and str(romance_line).strip():
+        PERSONA_ROMANCE_LINES[key] = str(romance_line).strip()
+    if romance and key not in ROMANCE_PERSONAS:
+        ROMANCE_PERSONAS = tuple(ROMANCE_PERSONAS) + (key,)
+    return key
+
+
+def forget_persona(key):
+    """删掉一个自定义人设（内置的不动）。返回是否真的删了。"""
+    global ROMANCE_PERSONAS
+    key = str(key or "").strip()
+    if not key or key in BUILTIN_PERSONAS:
+        return False
+    PERSONA_PROMPTS.pop(key, None)
+    PERSONA_NAMES.pop(key, None)
+    PERSONA_HINTS.pop(key, None)
+    PERSONA_TONES.pop(key, None)
+    PERSONA_ROMANCE_LINES.pop(key, None)
+    if key in ROMANCE_PERSONAS:
+        ROMANCE_PERSONAS = tuple(k for k in ROMANCE_PERSONAS if k != key)
+    return True
+
+
 def _json_object(text):
     """从模型输出里抠出第一个 JSON 对象（它经常套着 ```json 围栏）。"""
     if not text:

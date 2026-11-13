@@ -103,8 +103,15 @@ try:
                   if g.c.type(i) == "polygon"]
     check("按钮悬停会变色", body_before != body_after,
           (body_before, body_after))
-    check("悬停时光标变手形", g.c.cget("cursor") == "hand2",
-          g.c.cget("cursor"))
+    card = g.c.find_withtag("tile0")[0]
+    g._hover_tile("石头", True)
+    on_outline = g.c.itemcget(card, "outline")
+    g._hover_tile("石头", False)
+    off_outline = g.c.itemcget(card, "outline")
+    check("手势卡悬停会亮边框", on_outline != off_outline,
+          (on_outline, off_outline))
+    check("悬停不会在光标下新建 item", len(g.c.find_withtag("hover")) == 0,
+          len(g.c.find_withtag("hover")))
     pill._on_leave()
     pill.set_enabled(False)
 
