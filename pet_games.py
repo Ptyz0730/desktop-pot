@@ -797,7 +797,7 @@ class RPSGame(GameWindow):
             self.card(x, 278, x + tile_w, 356, 16, fill=CARD, tags=(tag,))
             cx, cy = x + tile_w / 2.0, 316
             self._hand_art(cx, cy - 2, hand, 54, tag)
-            self.txt(cx, 344, hand, 9, MUTED, tags=(tag,))
+            self.txt(cx, 344, hand, 9, INK_SOFT, tags=(tag,))
             # 悬停只改这张卡片的描边颜色（不能在光标底下新建 item：
             # 新 item 会盖住卡片，Tk 就在 Enter/Leave 之间来回抖成死循环）
             self.card_ids[hand] = self.c.find_withtag(tag)[0]

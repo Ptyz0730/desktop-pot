@@ -33,7 +33,17 @@ a = Analysis(
            ('assets/school_badge_faded.png', 'assets'),
            # 托盘 / exe / 窗口图标：校徽（tools/make_badge_ico.py 生成）
            ('assets/school_badge.ico', 'assets'),
-           ('assets/pet.ico', 'assets')],
+           ('assets/pet.ico', 'assets'),
+           # 小游戏用的 OpenMoji 表情图（黄底黑描边的贴纸风手势 / 花色）
+           ('assets/emoji/fist.png', 'assets/emoji'),
+           ('assets/emoji/scissors.png', 'assets/emoji'),
+           ('assets/emoji/hand.png', 'assets/emoji'),
+           ('assets/emoji/spade.png', 'assets/emoji'),
+           ('assets/emoji/heart.png', 'assets/emoji'),
+           ('assets/emoji/diamond.png', 'assets/emoji'),
+           ('assets/emoji/club.png', 'assets/emoji'),
+           ('assets/emoji/star.png', 'assets/emoji'),
+           ('assets/emoji/circle.png', 'assets/emoji')],
     hiddenimports=['PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
