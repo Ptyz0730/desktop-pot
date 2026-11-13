@@ -207,7 +207,7 @@ class StreamPlayer(object):
     主线程只做两件事：put 一条命令、读缓存状态（status()/mode()/position()）。
     """
 
-    OPEN_TIMEOUT = 32.0        # 开流超过这么久还没 playing，就当这个台不行
+    OPEN_TIMEOUT = 45.0        # 开流超过这么久还没 playing，就当这个台不行
 
     def __init__(self, alias=RADIO_ALIAS):
         self.alias = alias

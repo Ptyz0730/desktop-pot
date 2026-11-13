@@ -8224,7 +8224,9 @@ class DesktopPet:
             title = "电台：%s" % self.radio_station.get("name", "在线电台")
             state = self.stream.status()
             if state == "opening":
-                title += "（连接中…）"
+                # Windows 的 MCI 开网络流要 20~30 秒，把秒数写出来，
+                # 不然用户会以为卡死在这个「连接中」
+                title += "（连接中 %d 秒…）" % int(self.stream.waited())
             elif state in ("error", "stopped"):
                 title += "（断了）"
             self._music_bubble_wanted = True
@@ -8647,12 +8649,23 @@ class DesktopPet:
             if self.music_paused:
                 return
             state = self.stream.status()
+            if state != getattr(self, "_radio_was", ""):
+                self._radio_was = state
+                if state == "playing":
+                    # 连上了：把「连接中」的气泡换成正式标题
+                    self._radio_retry = 0
+                    self._radio_tick_at = 0.0
+                    if self._music_bubble_wanted:
+                        self.show_music_bubble()
             if state == "playing":
                 self._radio_retry = 0
                 return
             if state == "opening":
                 # 开流可能要 25 秒；超过 OPEN_TIMEOUT 就当这个台连不上
                 if self.stream.waited() < pet_music.StreamPlayer.OPEN_TIMEOUT:
+                    if self._music_bubble_wanted and now >= self._radio_tick_at:
+                        self._radio_tick_at = now + 2.0
+                        self.show_music_bubble()
                     return
                 self.stream.give_up("连接超时")
                 state = "error"
@@ -8669,6 +8682,8 @@ class DesktopPet:
                 except (pet_music.MusicError, RuntimeError) as exc:
                     self._music_log("radio: retry failed %r" % (exc,))
             self._radio_retry = 0
+            if state == "error":
+                self.speak("这个台连不上，换一个。")
             if not self._radio_switch(1, announce=False):
                 self.speak("电台断了。")
                 self.stop_music()

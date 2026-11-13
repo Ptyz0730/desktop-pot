@@ -10,22 +10,28 @@
     PetPersonaDialog(pet).show()
 """
 import json
+import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk
 
 import ai_client
 
+# 红白色系，和对话窗口 / 校徽一套
 BG = "#fffdfd"
 CARD = "#ffffff"
-INK = "#3b2b3a"
-INK_SOFT = "#6d5b6b"
-MUTED = "#a08e9c"
-ACCENT = "#c9354a"
-ACCENT_DK = "#9c2436"
+INK = "#332a2c"
+INK_SOFT = "#6b5f61"
+MUTED = "#9b8d8f"
+ACCENT = "#b3242a"          # 一中红
+ACCENT_DK = "#8a1a1f"
 LINE = "#f0d5d6"
+SOFT = "#fdf3f3"            # 浅红底（列表/脚注）
 FONT = "Microsoft YaHei UI"
+LOGO_SIZE = 46
+TITLE = "编辑人设"
 
 TIERS = (("0-20", 0), ("21-40", 21), ("41-60", 41), ("61-80", 61), ("81-100", 81))
 
@@ -112,8 +118,8 @@ def expand(brain, basic, name=""):
 class PetPersonaDialog:
     """人设编辑器窗口（单开）。"""
 
-    W = 720
-    H = 600
+    W = 780
+    H = 690
 
     def __init__(self, pet):
         self.pet = pet
@@ -162,33 +168,76 @@ class PetPersonaDialog:
         y = max(8, min(y, sh - self.H - 48))
         win.geometry("%dx%d+%d+%d" % (self.W, self.H, x, y))
 
+    def _asset(self, name):
+        """assets/ 下的素材：打包后在 _MEIPASS，开发时在项目目录。"""
+        bases = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")]
+        mei = getattr(sys, "_MEIPASS", None)
+        if mei:
+            bases.insert(0, os.path.join(mei, "assets"))
+        for base in bases:
+            path = os.path.join(base, name)
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _logo_photo(self, win):
+        path = self._asset("school_logo.png")
+        if not path:
+            return None
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(path).convert("RGBA")
+            img = img.resize((LOGO_SIZE, LOGO_SIZE), Image.LANCZOS)
+            self._logo = ImageTk.PhotoImage(img, master=win)
+            return self._logo
+        except Exception:                 # noqa: BLE001
+            return None
+
     def _build(self, win):
-        head = tk.Frame(win, bg=BG)
-        head.pack(fill="x", padx=16, pady=(14, 6))
-        tk.Label(head, text="编辑人设", bg=BG, fg=ACCENT, font=(FONT, 15, "bold")).pack(side="left")
-        tk.Label(head, text="改完记得点保存；内置人设不能改，可以「复制成自定义」",
-                 bg=BG, fg=MUTED, font=(FONT, 9)).pack(side="left", padx=10)
-        tk.Button(head, text="✕", command=self.close, bg=BG, fg=INK_SOFT,
-                  relief="flat", font=(FONT, 11), cursor="hand2").pack(side="right")
+        # ---------------------------------------------------------- 标题带
+        band_h = 72
+        band = tk.Frame(win, bg=CARD)
+        band.place(x=0, y=0, width=self.W, height=band_h)
+        logo = self._logo_photo(win)
+        if logo is not None:
+            tk.Label(band, image=logo, bg=CARD, bd=0).place(
+                x=16, y=(band_h - LOGO_SIZE) // 2)
+        text_x = 16 + (LOGO_SIZE + 14 if logo is not None else 0)
+        tk.Label(band, text=TITLE, bg=CARD, fg=ACCENT_DK,
+                 font=(FONT, 16, "bold")).place(x=text_x, y=13)
+        tk.Label(band, text="莆田一中 · 自定义角色", bg=CARD, fg=MUTED,
+                 font=(FONT, 9)).place(x=text_x + 2, y=42)
+        tk.Button(band, text="✕", command=self.close, bg=CARD, fg=MUTED,
+                  activebackground=SOFT, activeforeground=ACCENT_DK,
+                  relief="flat", bd=0, font=(FONT, 12),
+                  cursor="hand2").place(x=self.W - 44, y=14, width=30, height=28)
+        tk.Frame(win, bg=ACCENT, height=2).place(x=0, y=band_h - 2, width=self.W)
+        tk.Frame(win, bg=LINE, height=1).place(x=0, y=band_h + 6, width=self.W)
 
         body = tk.Frame(win, bg=BG)
-        body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        body.place(x=16, y=band_h + 18, width=self.W - 32, height=self.H - band_h - 74)
 
-        left = tk.Frame(body, bg=BG)
+        # ------------------------------------------------- 左：人设列表
+        left = tk.Frame(body, bg=BG, width=196)
         left.pack(side="left", fill="y")
-        tk.Label(left, text="人设列表", bg=BG, fg=INK_SOFT, font=(FONT, 9)).pack(anchor="w")
-        box = tk.Frame(left, bg=LINE, bd=0)
-        box.pack(fill="y", expand=True, pady=(4, 6))
-        self.listbox = tk.Listbox(box, width=20, bg=CARD, fg=INK, bd=0,
+        left.pack_propagate(False)
+        tk.Label(left, text="人设列表", bg=BG, fg=ACCENT, font=(FONT, 9, "bold")
+                 ).pack(anchor="w")
+        card = tk.Frame(left, bg=CARD, highlightbackground=LINE,
+                        highlightthickness=1)
+        card.pack(fill="both", expand=True, pady=(6, 8))
+        self.listbox = tk.Listbox(card, width=20, bg=CARD, fg=INK, bd=0,
                                   highlightthickness=0, font=(FONT, 10),
-                                  activestyle="none", exportselection=False)
-        self.listbox.pack(side="left", fill="both", expand=True, padx=1, pady=1)
+                                  activestyle="none", exportselection=False,
+                                  selectbackground=ACCENT,
+                                  selectforeground="#ffffff")
+        self.listbox.pack(side="left", fill="both", expand=True, padx=2, pady=2)
         self.listbox.bind("<<ListboxSelect>>", lambda e: self._on_pick())
-        tk.Button(left, text="＋ 新建人设", command=self._new, bg=CARD, fg=ACCENT,
-                  relief="solid", bd=1, font=(FONT, 10), cursor="hand2").pack(fill="x")
+        self._btn(left, "＋ 新建人设", self._new, width=10).pack(fill="x")
 
+        # ------------------------------------------------- 右：表单
         right = tk.Frame(body, bg=BG)
-        right.pack(side="left", fill="both", expand=True, padx=(14, 0))
+        right.pack(side="left", fill="both", expand=True, padx=(16, 0))
 
         self.v_name = tk.StringVar()
         self.v_hint = tk.StringVar()
@@ -201,59 +250,75 @@ class PetPersonaDialog:
 
         tk.Label(right, text="人设正文（AI 会按这段说话）", bg=BG, fg=INK_SOFT,
                  font=(FONT, 9)).grid(row=2, column=0, sticky="w", pady=(8, 2))
-        self.txt = tk.Text(right, width=54, height=11, bg=CARD, fg=INK,
-                           relief="solid", bd=1, wrap="word",
-                           font=(FONT, 10), insertbackground=ACCENT,
-                           highlightthickness=0)
+        self.txt = tk.Text(right, width=58, height=13, bg=CARD, fg=INK,
+                           relief="flat", wrap="word", font=(FONT, 10),
+                           insertbackground=ACCENT, highlightthickness=1,
+                           highlightbackground=LINE, highlightcolor=ACCENT,
+                           padx=8, pady=6)
         self.txt.grid(row=3, column=0, columnspan=3, sticky="we")
 
         tiers = tk.Frame(right, bg=BG)
-        tiers.grid(row=4, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        tiers.grid(row=4, column=0, columnspan=3, sticky="we", pady=(10, 0))
         tk.Label(tiers, text="好感度语气（0-100 五档）", bg=BG, fg=INK_SOFT,
                  font=(FONT, 9)).grid(row=0, column=0, columnspan=2, sticky="w")
         for i, (label, _thr) in enumerate(TIERS):
             tk.Label(tiers, text=label, bg=BG, fg=MUTED, width=7, anchor="e",
                      font=(FONT, 9)).grid(row=i + 1, column=0, sticky="e", pady=1)
-            entry = tk.Entry(tiers, textvariable=self.v_tier[i], width=58,
-                             bg=CARD, fg=INK, relief="solid", bd=1,
-                             font=(FONT, 9), highlightthickness=0)
+            entry = self._entry(tiers, self.v_tier[i], 58, 9)
             entry.grid(row=i + 1, column=1, sticky="we", pady=1)
             self.tier_entries.append(entry)
 
         self._row(right, "告白台词", self.v_love, 5, width=40)
-        for col in (0, 1, 2, 3, 4, 5, 6):
+        for col in range(7):
             right.grid_rowconfigure(col, weight=0)
         right.grid_columnconfigure(1, weight=1)
 
-        foot = tk.Frame(win, bg=BG)
-        foot.pack(fill="x", padx=16, pady=(0, 14))
-        self.status = tk.Label(foot, text="", bg=BG, fg=INK_SOFT, font=(FONT, 9))
-        self.status.pack(side="left")
+        # ---------------------------------------------------------- 脚注
+        tk.Frame(win, bg=LINE, height=1).place(x=0, y=self.H - 52, width=self.W)
+        foot = tk.Frame(win, bg=SOFT)
+        foot.place(x=0, y=self.H - 51, width=self.W, height=51)
+        self.status = tk.Label(foot, text="", bg=SOFT, fg=INK_SOFT, font=(FONT, 9))
+        self.status.pack(side="left", padx=16)
 
-        self.b_save = tk.Button(foot, text="保存", command=self._save, bg=ACCENT,
-                                fg="#ffffff", relief="flat", width=8,
-                                font=(FONT, 10, "bold"), cursor="hand2")
-        self.b_save.pack(side="right", padx=(8, 0))
-        self.b_copy = tk.Button(foot, text="复制成自定义", command=self._copy,
-                                bg=CARD, fg=ACCENT, relief="solid", bd=1,
-                                width=12, font=(FONT, 10), cursor="hand2")
-        self.b_copy.pack(side="right", padx=(8, 0))
-        self.b_del = tk.Button(foot, text="删除", command=self._delete, bg=CARD,
-                               fg=ACCENT_DK, relief="solid", bd=1, width=6,
-                               font=(FONT, 10), cursor="hand2")
-        self.b_del.pack(side="right", padx=(8, 0))
-        self.b_ai = tk.Button(foot, text="AI 扩写", command=self._expand, bg=CARD,
-                              fg=ACCENT, relief="solid", bd=1, width=9,
-                              font=(FONT, 10), cursor="hand2")
-        self.b_ai.pack(side="right")
+        self.b_save = self._btn(foot, "保存", self._save, width=8, primary=True)
+        self.b_save.pack(side="right", padx=(8, 14), pady=9)
+        self.b_copy = self._btn(foot, "复制成自定义", self._copy, width=12)
+        self.b_copy.pack(side="right", padx=8, pady=9)
+        self.b_del = self._btn(foot, "删除", self._delete, width=6)
+        self.b_del.pack(side="right", padx=8, pady=9)
+        self.b_ai = self._btn(foot, "AI 扩写", self._expand, width=9)
+        self.b_ai.pack(side="right", pady=9)
+
+    def _btn(self, parent, text, command, width=8, primary=False):
+        """红白按钮：主按钮实心红，其余白底红字 + 细红框。"""
+        if primary:
+            return tk.Button(parent, text=text, command=command, bg=ACCENT,
+                             fg="#ffffff", activebackground=ACCENT_DK,
+                             activeforeground="#ffffff",
+                             disabledforeground="#e9b6b8",
+                             relief="flat", bd=0, width=width,
+                             font=(FONT, 10, "bold"), cursor="hand2",
+                             highlightthickness=0)
+        return tk.Button(parent, text=text, command=command, bg=CARD, fg=ACCENT,
+                         activebackground=SOFT, activeforeground=ACCENT_DK,
+                         disabledforeground="#cbb9ba",
+                         relief="flat", bd=0, width=width,
+                         font=(FONT, 10), cursor="hand2",
+                         highlightthickness=1,
+                         highlightbackground="#e7bfc0",
+                         highlightcolor="#e7bfc0")
+
+    def _entry(self, parent, var, width=30, size=10):
+        return tk.Entry(parent, textvariable=var, width=width, bg=CARD, fg=INK,
+                        relief="flat", font=(FONT, size), insertbackground=ACCENT,
+                        highlightthickness=1, highlightbackground=LINE,
+                        highlightcolor=ACCENT)
 
     def _row(self, parent, label, var, row, width=30):
         tk.Label(parent, text=label, bg=BG, fg=INK_SOFT, font=(FONT, 9)).grid(
-            row=row, column=0, sticky="w", pady=2)
-        entry = tk.Entry(parent, textvariable=var, width=width, bg=CARD, fg=INK,
-                         relief="solid", bd=1, font=(FONT, 10),
-                         highlightthickness=0)
-        entry.grid(row=row, column=1, columnspan=2, sticky="we", pady=2)
+            row=row, column=0, sticky="w", pady=3)
+        entry = self._entry(parent, var, width, 10)
+        entry.grid(row=row, column=1, columnspan=2, sticky="we", pady=3)
         return entry
 
     # ------------------------------------------------------------ 数据

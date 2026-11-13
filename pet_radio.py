@@ -172,7 +172,7 @@ class RadioDialog(object):
         tk.Button(head, text="✕", command=self.close, bg=BG, fg=INK_SOFT,
                   relief="flat", font=(font, 11, "bold"), bd=0,
                   activebackground=PEACH).pack(side="right")
-        tk.Label(self.win, text="直接听网上的电台，不用往 music 文件夹里放歌",
+        tk.Label(self.win, text="直接听网上的电台，不用往 music 文件夹里放歌　·　点台后要等 20~30 秒才出声（Windows 的限制）",
                  bg=BG, fg=MUTED, font=(font, 8)).pack(anchor="w", padx=16)
 
         row = tk.Frame(self.win, bg=BG)
